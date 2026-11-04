@@ -19,6 +19,7 @@ from fsspec.utils import (
     glob_translate,
     isfilelike,
     nullcontext,
+    parse_content_range_header,
     range_response_window,
     response_is_requested_range,
     tokenize,
@@ -363,10 +364,41 @@ class HTTPFileSystem(AsyncFileSystem):
             async with session.get(self.encode_url(url), **kw) as r:
                 out = await r.read()
                 self._raise_not_found_for_status(r, url)
-                # a server that ignores the Range header replies with the whole
-                # file, which is not the window the caller asked for
+                # Some servers return a partial body with status 200 and no
+                # Content-Range. A HEAD size is needed to tell that apart
+                # from a server that ignored the Range request.
+                total_size = None
+                if (
+                    ranged
+                    and start is not None
+                    and start > 0
+                    and r.status != 206
+                    and parse_content_range_header(r.headers)[0] is None
+                ):
+                    head_kw = kw.copy()
+                    head_kw["headers"] = {
+                        key: value
+                        for key, value in kw["headers"].items()
+                        if key.lower() != "range"
+                    }
+                    try:
+                        async with session.head(
+                            self.encode_url(url), **head_kw
+                        ) as head:
+                            encoding = head.headers.get("Content-Encoding", "identity")
+                            if head.status == 200 and encoding.lower() == "identity":
+                                total_size = int(head.headers.get("Content-Length"))
+                    except (
+                        aiohttp.ClientError,
+                        asyncio.TimeoutError,
+                        TypeError,
+                        ValueError,
+                    ):
+                        pass
                 return (
-                    range_response_window(out, r.status, r.headers, start, end)
+                    range_response_window(
+                        out, r.status, r.headers, start, end, total_size
+                    )
                     if ranged
                     else out
                 )

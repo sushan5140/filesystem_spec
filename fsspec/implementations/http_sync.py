@@ -21,6 +21,7 @@ from fsspec.utils import (
     DEFAULT_BLOCK_SIZE,
     isfilelike,
     nullcontext,
+    parse_content_range_header,
     range_response_window,
     response_is_requested_range,
     tokenize,
@@ -383,9 +384,34 @@ class HTTPFileSystem(AbstractFileSystem):
         self._raise_not_found_for_status(r, url)
         if not ranged:
             return r.content
-        # a server that ignores the Range header replies with the whole file,
-        # which is not the window the caller asked for
-        return range_response_window(r.content, r.status_code, r.headers, start, end)
+        # A 200 response without Content-Range may contain either a
+        # non-standard partial body or the whole file; check its size.
+        total_size = None
+        if (
+            start is not None
+            and start > 0
+            and r.status_code != 206
+            and parse_content_range_header(r.headers)[0] is None
+        ):
+            head_kw = kw.copy()
+            head_kw["headers"] = {
+                key: value
+                for key, value in kw["headers"].items()
+                if key.lower() != "range"
+            }
+            try:
+                head = self.session.head(self.encode_url(url), **head_kw)
+                if (
+                    head.status_code == 200
+                    and head.headers.get("Content-Encoding", "identity").lower()
+                    == "identity"
+                ):
+                    total_size = int(head.headers.get("Content-Length"))
+            except (OSError, TypeError, ValueError):
+                pass
+        return range_response_window(
+            r.content, r.status_code, r.headers, start, end, total_size
+        )
 
     def get_file(
         self, rpath, lpath, chunk_size=5 * 2**20, callback=_DEFAULT_CALLBACK, **kwargs

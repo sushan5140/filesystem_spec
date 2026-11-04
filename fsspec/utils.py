@@ -612,6 +612,7 @@ def range_response_window(
     headers: Mapping[str, str],
     start: int | None,
     end: int | None,
+    total_size: int | None = None,
 ) -> bytes:
     """The requested window of a response body that may be the whole file."""
     lo = 0 if start is None else start
@@ -623,7 +624,19 @@ def range_response_window(
         content_range_start = parse_content_range_header(headers)[0]
         if lo >= 0 and content_range_start is not None and content_range_start != lo:
             window = 0
-        if window is not None and len(out) > window:
+        no_verified_offset = False
+        if lo > 0 and content_range_start is None:
+            # HTTP 200 may also contain a partial response. Only accept it
+            # when a separate full-file size confirms the requested length.
+            if total_size is None:
+                no_verified_offset = True
+            else:
+                stop = total_size if end is None else end
+                if stop < 0:
+                    stop += total_size
+                expected = max(0, min(stop, total_size) - lo)
+                no_verified_offset = len(out) != expected
+        if no_verified_offset or (window is not None and len(out) > window):
             if lo > 0:
                 raise ValueError(
                     "The HTTP server doesn't appear to support range requests. "

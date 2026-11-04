@@ -516,6 +516,46 @@ def test_range_response_window(status, header, start, end, expected):
 
 
 @pytest.mark.parametrize(
+    "status,headers,start,end,total_size,body,expected",
+    [
+        (200, {}, 3, None, None, b"0123456789", None),
+        (200, {}, 3, None, 10, b"0123456789", None),
+        (200, {}, 3, 100, 10, b"0123456789", None),
+        (200, {}, 3, 13, 10, b"0123456789", None),
+        (200, {}, 3, -1, 10, b"0123456789", None),
+        (200, {}, 3, None, 10, b"", None),
+        (200, {}, 3, None, 10, b"3456789", b"3456789"),
+        (200, {}, 3, 100, 10, b"3456789", b"3456789"),
+        (200, {}, 3, -1, 10, b"345678", b"345678"),
+        (200, {}, 3, 6, 10, b"345", b"345"),
+        (200, {}, 3, 6, None, b"345", None),
+        (
+            200,
+            {"Content-Range": "bytes 3-9/10"},
+            3,
+            None,
+            None,
+            b"3456789",
+            b"3456789",
+        ),
+        (206, {}, 3, None, None, b"3456789", b"3456789"),
+        (200, {}, 0, 5, None, b"0123456789", b"01234"),
+    ],
+)
+def test_range_response_window_unverified_offset(
+    status, headers, start, end, total_size, body, expected
+):
+    if expected is None:
+        with pytest.raises(ValueError, match="support range requests"):
+            range_response_window(body, status, headers, start, end, total_size)
+    else:
+        assert (
+            range_response_window(body, status, headers, start, end, total_size)
+            == expected
+        )
+
+
+@pytest.mark.parametrize(
     "pattern,text,expected",
     [
         ("[a-c]", "b", True),
